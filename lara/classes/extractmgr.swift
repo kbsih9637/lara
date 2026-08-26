@@ -87,7 +87,7 @@ final class extractmgr {
                     let size = vfs_filesize(full)
                     guard size >= 0, size <= options.maxFileSize else { continue }
                     out.append((full, false, size))
-                    let totalSoFar = out.reduce(0) { $0 + $1.size }
+                    let totalSoFar = out.reduce(0) { $0 + $1.2 }
                     progress?(ExtractProgress(currentPath: full, filesDone: out.count, bytesDone: totalSoFar, totalBytes: 0))
                 }
             }
