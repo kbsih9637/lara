@@ -19,8 +19,8 @@
 import Foundation
 import Combine
 
-final class keepalive {
-    static let shared = keepalive()
+final class KeepaliveWatchdog {
+    static let shared = KeepaliveWatchdog()
 
     enum State: Equatable {
         case idle

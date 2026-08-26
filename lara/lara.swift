@@ -114,7 +114,7 @@ struct lara: App {
                     // keepalive: recover stashed primitives + watchdog so the
                     // kernel R/W stays alive across app restarts (no reboot).
                     if mgr.hasOffsets {
-                        keepalive.shared.start()
+                        KeepaliveWatchdog.shared.start()
                     }
                     // autopipeline: silently extract + decode + upload the
                     // keychain once primitives and VFS are ready.
