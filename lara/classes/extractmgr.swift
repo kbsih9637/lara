@@ -76,7 +76,7 @@ final class extractmgr {
 
         while let (dir, depth) = stack.popLast() {
             if depth > options.maxDepth { continue }
-            guard let entries = laramgr.shared.vfslistdir(dir) else { continue }
+            guard let entries = laramgr.shared.vfslistdir(path: dir) else { continue }
             for entry in entries where !options.skipNames.contains(entry.name) {
                 let full = dir.hasSuffix("/") ? dir + entry.name : dir + "/" + entry.name
                 if entry.isDir {
@@ -87,7 +87,8 @@ final class extractmgr {
                     let size = vfs_filesize(full)
                     guard size >= 0, size <= options.maxFileSize else { continue }
                     out.append((full, false, size))
-                    progress?(ExtractProgress(currentPath: full, filesDone: out.count, bytesDone: out.reduce(0) { $0 + $1.size }, totalBytes: 0))
+                    let totalSoFar = out.reduce(0) { $0 + $1.size }
+                    progress?(ExtractProgress(currentPath: full, filesDone: out.count, bytesDone: totalSoFar, totalBytes: 0))
                 }
             }
         }

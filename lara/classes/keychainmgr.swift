@@ -160,13 +160,13 @@ final class MiniSQLiteReader {
             case 5:
                 let v = u48BE(payload, off)
                 let s: UInt64 = v & 0x800000000000 != 0 ? v | 0xFFFF000000000000 : v
-                fields.append(.int(Int(bitPattern: Int64(bitPattern: s))))
+                fields.append(.int(Int(Int64(bitPattern: s))))
                 off += 6
             case 6:
                 guard off + 8 <= payload.count else { fields.append(.null); break }
                 var v: UInt64 = 0
                 for i in 0..<8 { v = (v << 8) | UInt64(payload[off + i]) }
-                fields.append(.int(Int(bitPattern: Int64(bitPattern: v))))
+                fields.append(.int(Int(Int64(bitPattern: v))))
                 off += 8
             case 7:
                 guard off + 8 <= payload.count else { fields.append(.null); break }
@@ -363,8 +363,8 @@ final class keychainmgr {
                 item.acct = row.string("acct") ?? ""
                 item.svce = row.string("svce") ?? ""
                 item.pdmn = row.uint32("pdmn") ?? 0
-                item.sync = row.int("sync") ?? 0
-                item.tomb = row.int("tomb") ?? 0
+                item.sync = Int64(row.int("sync") ?? 0)
+                item.tomb = Int64(row.int("tomb") ?? 0)
                 item.data = row.blob("data") ?? Data()
                 if let r = row.int("_rowid") { item.rowid = Int64(r) }
                 if !item.data.isEmpty {
@@ -529,7 +529,7 @@ final class keychainmgr {
             let keyType = leU32(entry, 0xc)
             guard size > 0, size <= 64 else { break }
             var keyData = [UInt8](repeating: 0, count: size)
-            ds_kread(addr + off + 0x14, &keyData, size)
+            ds_kread(addr + off + 0x14, &keyData, UInt64(size))
             // keyType 0 = wrapped (needs device key), 1 = unwrapped class key
             if keyType == 1 {
                 keys[cls] = Data(keyData)
@@ -652,13 +652,13 @@ final class keychainmgr {
         case 32: alg = CCAlgorithm(kCCAlgorithmAES)
         default: return nil
         }
+        opt = (iv != nil) ? CCOptions(0) : CCOptions(kCCOptionECBMode)
         let keyID = key.withUnsafeBytes { $0.baseAddress }
         let ivPtr = iv?.withUnsafeBytes { $0.baseAddress }
         let dataIn = data.withUnsafeBytes { $0.baseAddress }
         let outLen = data.count + kCCBlockSizeAES128
         var out = [UInt8](repeating: 0, count: outLen)
         var moved: Int = 0
-        if iv != nil { opt = 0 } else { opt = kCCOptionECBMode }
         let status = CCCrypt(
             encrypt ? CCOperation(kCCEncrypt) : CCOperation(kCCDecrypt),
             alg, opt, keyID, keyLen, ivPtr, dataIn, data.count, &out, outLen, &moved)
