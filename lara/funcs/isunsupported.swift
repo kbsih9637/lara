@@ -30,6 +30,11 @@ func hasmie() -> Bool {
 }
 
 func isunsupported() -> Bool {
+    // Research override: let the user try unsupported builds anyway.
+    if UserDefaults.standard.bool(forKey: "lara.forceOffsets") {
+        return false
+    }
+    
     let v = ProcessInfo.processInfo.operatingSystemVersion
     
     if v.majorVersion < 16 {

