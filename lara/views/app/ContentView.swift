@@ -298,46 +298,50 @@ struct ContentView: View {
 
     @ViewBuilder
     private var InlineLogsSection: some View {
-        if selectedlogsdisplaymode == .content {
-            Section {
+        Section {
+            ScrollViewReader { proxy in
                 ScrollView {
-                    if loggernobs {
-                        let combined = logger.logs.joined(separator: "\n")
-                        Text(combined)
-                            .font(.system(size: 13, design: .monospaced))
-                            .lineSpacing(1)
-                            .textSelection(.enabled)
-                            .onTapGesture {
-                                UIPasteboard.general.string = combined
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            }
-                    } else {
-                        ForEach(Array(logger.logs.enumerated()), id: \.offset) { _, log in
-                            Text(log)
+                    VStack(alignment: .leading, spacing: 2) {
+                        if loggernobs {
+                            Text(logger.logs.joined(separator: "\n"))
                                 .font(.system(size: 13, design: .monospaced))
-                                .lineSpacing(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .textSelection(.enabled)
-                                .onTapGesture {
-                                    UIPasteboard.general.string = log
-                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                }
+                                .padding(.vertical, 2)
+                        } else {
+                            ForEach(Array(logger.logs.enumerated()), id: \.offset) { _, log in
+                                Text(log)
+                                    .font(.system(size: 13, design: .monospaced))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .textSelection(.enabled)
+                                    .padding(.vertical, 1)
+                            }
                         }
+                        // anchor for auto-scroll to newest line
+                        Color.clear.frame(height: 1).id("logbottom")
                     }
                 }
-                .frame(height: 250)
-                
+                .frame(height: 240)
+                .onChange(of: logger.logs.count) { _ in
+                    withAnimation(.none) {
+                        proxy.scrollTo("logbottom", anchor: .bottom)
+                    }
+                }
+            }
+
+            HStack {
                 Button("Copy All") {
                     UIPasteboard.general.string = logger.logs.joined(separator: "\n\n")
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 }
-                
+                Spacer()
                 Button("Clear") {
                     logger.clear()
                 }
                 .foregroundColor(.red)
-            } header: {
-                HeaderLabel(text: "Logs", icon: "terminal")
             }
+        } header: {
+            HeaderLabel(text: "Logs", icon: "terminal")
         }
     }
 }
