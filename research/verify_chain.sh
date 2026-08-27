@@ -60,7 +60,9 @@ else
 fi
 
 echo "---- 匹配结果 ----"
-grep -E '\(chainrouter\)|\(20626\)|\(20698\)|\(264\)|\(266\)|exploit (success|failed)' "$TMPLOG" \
+# NOTE: chain files log with [20626]/[20698]/[264]/[266] (CHAIN_TAG) while
+# chainrouter logs (chainrouter); escape brackets for grep.
+grep -E '\(chainrouter\)|\[20626\]|\[20698\]|\[264\]|\[266\]|exploit (success|failed)' "$TMPLOG" \
     | tail -40 || echo "（未抓到链标签：app 可能未启动或 forceOffsets 未设）"
 
 echo
@@ -75,12 +77,12 @@ grep -E '\[autopipeline\]|keychain-2\.db:|keybag|decrypt(ed|ion)|uploaded|payloa
 
 echo
 echo "---- [目标2] 砸壳 (decrypt_app) ----"
-grep -E 'decrypted .*\(.*\)|decrypt failed|app list unavailable|binary not encrypted|failed to (read|parse|write)' "$TMPLOG" \
+grep -E 'decrypted |decrypt failed|app list unavailable|binary not encrypted|failed to (read|parse|write)' "$TMPLOG" \
     | tail -20 || echo "（无砸壳输出：decryptBundleIDs 未配置或未到 file stage）"
 
 echo
 echo "---- [目标3] keepalive / 不重启 (KeepaliveWatchdog) ----"
-grep -E 'keepalive:|recover(stash|ed)|primitive' "$TMPLOG" \
+grep -E '^keepalive:|keepalive: |recovered stashed primitives|exploit re-run succeeded' "$TMPLOG" \
     | tail -20 || echo "（无 keepalive 输出：hasOffsets=false，watchdog 未启动）"
 
 echo

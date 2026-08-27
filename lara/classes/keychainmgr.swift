@@ -574,12 +574,6 @@ final class keychainmgr {
         return nil
     }
 
-    private func leU32(_ d: [UInt8], _ off: Int) -> UInt32 {
-        guard off + 3 < d.count else { return 0 }
-        return UInt32(d[off]) | (UInt32(d[off + 1]) << 8) |
-            (UInt32(d[off + 2]) << 16) | (UInt32(d[off + 3]) << 24)
-    }
-
     private func beU32(_ d: [UInt8], _ off: Int) -> UInt32 {
         guard off + 3 < d.count else { return 0 }
         return UInt32(d[off]) << 24 | UInt32(d[off + 1]) << 16 |
