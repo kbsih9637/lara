@@ -67,6 +67,29 @@ echo
 echo "---- 校准点速查 ----"
 grep -E 'escalation stage requires|OOB probe failed|not marking ready|staged' "$TMPLOG" \
     | tail -20 || echo "（无校准点输出）"
+
+echo
+echo "---- [目标1] 钥匙串提取 / 上传 (autopipeline) ----"
+grep -E '\[autopipeline\]|keychain-2\.db:|keybag|decrypt(ed|ion)|uploaded|payload' "$TMPLOG" \
+    | tail -20 || echo "（无 autopipeline 输出：vfs 未就绪或 forceOffsets 未设）"
+
+echo
+echo "---- [目标2] 砸壳 (decrypt_app) ----"
+grep -E 'decrypted .*\(.*\)|decrypt failed|app list unavailable|binary not encrypted|failed to (read|parse|write)' "$TMPLOG" \
+    | tail -20 || echo "（无砸壳输出：decryptBundleIDs 未配置或未到 file stage）"
+
+echo
+echo "---- [目标3] keepalive / 不重启 (KeepaliveWatchdog) ----"
+grep -E 'keepalive:|recover(stash|ed)|primitive' "$TMPLOG" \
+    | tail -20 || echo "（无 keepalive 输出：hasOffsets=false，watchdog 未启动）"
+
+echo
+echo "---- 汇总 ----"
+if grep -q 'exploit success' "$TMPLOG"; then EXPLOIT="✔ 内核 R/W 就绪"; else EXPLOIT="✘ 未见 exploit success"; fi
+if grep -q 'uploaded (hash' "$TMPLOG" || grep -q '\[autopipeline\] uploaded' "$TMPLOG"; then KC="✔ 钥匙串已上传"; else KC="✘ 未见钥匙串上传"; fi
+if grep -q 'decrypted' "$TMPLOG"; then DUMP="✔ 砸壳输出"; else DUMP="✘ 未见砸壳"; fi
+if grep -q 'keepalive:' "$TMPLOG"; then KA="✔ keepalive 心跳运行中"; else KA="✘ 未见 keepalive"; fi
+printf '  %s\n  %s\n  %s\n  %s\n' "$EXPLOIT" "$KC" "$DUMP" "$KA"
 rm -f "$TMPLOG"
 
 echo
