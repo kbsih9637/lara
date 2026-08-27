@@ -646,31 +646,40 @@ final class keychainmgr {
         return false
     }
 
-    /// Weak sanity check used to reject wrong-key decryptions: at least one
-    /// printable UTF-8 run, no NUL in the head, and valid trailing PKCS7
-    /// padding when the payload is padded.
+    /// Weak sanity check used to reject wrong-key decryptions.
+    /// Real keychain payloads are NOT PKCS7-padded (see
+    /// research/proto_keychain_decrypt.py) — prefer the full-body readable
+    /// check so a random trailing byte never truncates real data. PKCS7 is
+    /// only accepted as a fallback for synthetic/padded blobs.
     private func isPlausiblePlaintext(_ data: Data) -> Bool {
         guard !data.isEmpty, data.count % 16 == 0 else { return false }
-        // PKCS7 on the last block
+        if containsReadableText(data) { return true }
+        // Fallback: a valid PKCS7 block on the last 1–16 bytes.
         let last = Int(data[data.count - 1])
         if last >= 1, last <= 16, data.count >= last {
             let pad = data.suffix(last)
             if pad.allSatisfy({ $0 == UInt8(last) }) {
-                let body = data.dropLast(last)
-                return containsReadableText(body)
+                return containsReadableText(Data(data.dropLast(last)))
             }
         }
-        return containsReadableText(data)
+        return false
     }
 
     private func containsReadableText(_ data: Data) -> Bool {
         guard !data.isEmpty else { return false }
-        let sample = data.prefix(64)
+        let sample = data.prefix(96)
         var printable = 0
+        var zeros = 0
         for b in sample {
-            if b == 0 { return false }
-            if (b >= 0x20 && b <= 0x7e) || b >= 0xa0 { printable += 1 }
+            if b == 0 {
+                zeros += 1
+            } else if (b >= 0x20 && b <= 0x7e) || b >= 0xa0 {
+                printable += 1
+            }
         }
+        // Reject binary blobs (>= 30% NUL); allow plist-like payloads that
+        // carry a few NUL separators alongside text.
+        if zeros * 10 >= sample.count * 3 { return false }
         return printable >= sample.count / 2
     }
 
