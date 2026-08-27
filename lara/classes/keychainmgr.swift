@@ -447,7 +447,7 @@ final class keychainmgr {
         guard end > start, end - start <= 0x40000000 else { return }
         if found.count >= 8 { return }
         let magic: [UInt8] = Array("keybag".utf8)
-        let chunk = [UInt8](repeating: 0, count: Int(step))
+        var chunk = [UInt8](repeating: 0, count: Int(step))
         var addr = start
         var matches = 0
         while addr + step <= end, matches < maxMatches {
