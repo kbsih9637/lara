@@ -289,7 +289,7 @@ final class autopipeline {
         msgs.append(contentsOf: parsed.messages)
 
         // Try every key-fetch backend; stop at the first that yields keys.
-        var keys: [UInt32: Data]? = nil
+        var keys: [UInt32: [Data]]? = nil
         for method in [KeybagFetchMethod.kernelKeybagScan,
                        KeybagFetchMethod.securitydScan,
                        KeybagFetchMethod.appleKeyStoreMIG] {

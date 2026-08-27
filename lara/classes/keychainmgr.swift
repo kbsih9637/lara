@@ -377,7 +377,7 @@ final class keychainmgr {
 
     // MARK: class key acquisition
 
-    func fetchClassKeys(method: KeybagFetchMethod, logger: (String) -> Void) -> [UInt32: Data]? {
+    func fetchClassKeys(method: KeybagFetchMethod, logger: (String) -> Void) -> [UInt32: [Data]]? {
         switch method {
         case .securitydScan:
             return scanSecuritydForClassKeys(logger: logger)
@@ -392,7 +392,7 @@ final class keychainmgr {
     /// securityd holds 16/32-byte class keys after the device is unlocked.
     /// We locate securityd's proc, walk its VM map, and look for the
     /// 16-byte key structure used by AppleKeyStore class keys.
-    private func scanSecuritydForClassKeys(logger: (String) -> Void) -> [UInt32: Data]? {
+    private func scanSecuritydForClassKeys(logger: (String) -> Void) -> [UInt32: [Data]]? {
         logger("securityd class-key scan: locating securityd")
         let proc = procbyname("securityd")
         guard proc != 0 else {
@@ -406,7 +406,7 @@ final class keychainmgr {
         guard vmMap != 0 else { logger("securityd vm_map not found"); return nil }
 
         // Walk the vm map looking for heap regions (wired, readable, rw).
-        var found: [UInt32: Data] = [:]
+        var found: [UInt32: [Data]] = [:]
         let headerLinks = ds_kread64(vmMap + UInt64(off_vm_map_header_links_next))
         let hdr = ds_kread64(vmMap + UInt64(off_vm_map_hdr))
         var cursor = hdr != 0 ? hdr : headerLinks
@@ -432,17 +432,39 @@ final class keychainmgr {
         return found.isEmpty ? nil : found
     }
 
+    /// Scan a readable vm region for keybag material ("keybag" magic) and
+    /// class-key candidates. On an UNLOCKED device, securityd holds an
+    /// effective keybag whose class-key slots are already unwrapped; we
+    /// locate it by magic and validate the structure before extracting.
+    ///
+    /// Only the first `maxMatches` regions per call are processed so a
+    /// pathological vm map cannot stall the scan.
     private func scanRangeForClassKeys(_ start: UInt64, _ end: UInt64,
-                                       into found: inout [UInt32: Data],
-                                       logger: (String) -> Void) {
-        // Class keys are 16-byte AES keys. Scanning raw heap for them is a
-        // heuristic: look for the AppleKeyStore keybag blob ("keybag" magic)
-        // which contains the wrapped class keys, then try to unwrap using
-        // the device key. Because the unwrap key is not accessible, on an
-        // UNLOCKED device we instead look for the keybag structure whose
-        // class keys are already unwrapped in the "effective" keybag copy
-        // held by AppleKeyStore (kernel). See kernelKeybagScan below.
-        _ = start; _ = end; _ = logger
+                                       into found: inout [UInt32: [Data]],
+                                       logger: (String) -> Void,
+                                       maxMatches: Int = 16,
+                                       step: UInt64 = 0x4000) {
+        guard end > start, end - start <= 0x40000000 else { return }
+        if found.count >= 8 { return }
+        let magic: [UInt8] = Array("keybag".utf8)
+        let chunk = [UInt8](repeating: 0, count: Int(step))
+        var addr = start
+        var matches = 0
+        while addr + step <= end, matches < maxMatches {
+            ds_kread(addr, &chunk, step)
+            if let idx = findBytes(magic, in: chunk) {
+                let cand = addr + UInt64(idx)
+                if let keys = parseKeybag(at: cand) {
+                    logger("securityd keybag at 0x\(String(cand, radix: 16)): \(keys.count) class key(s)")
+                    for (k, v) in keys where found[k] == nil {
+                        found[k] = v
+                    }
+                    matches += 1
+                    if found.count >= 8 { return }
+                }
+            }
+            addr += step
+        }
     }
 
     /// Backend B: scan kernel heap for the AppleKeyStore keybag blob.
@@ -451,7 +473,7 @@ final class keychainmgr {
     /// key material in the "kek" / "class key" slots. The blob begins with
     /// the ASCII magic "keybag". We scan kernel memory at page granularity
     /// and verify candidates by structure.
-    private func scanKernelKeybag(logger: (String) -> Void) -> [UInt32: Data]? {
+    private func scanKernelKeybag(logger: (String) -> Void) -> [UInt32: [Data]]? {
         logger("kernel keybag scan: searching kernel heap for 'keybag'")
         guard VM_MIN_KERNEL_ADDRESS != 0, VM_MAX_KERNEL_ADDRESS != 0 else {
             logger("kernel range not initialised")
@@ -508,40 +530,46 @@ final class keychainmgr {
     }
 
     /// Parse an AppleKeyStore keybag blob at a kernel virtual address.
-    /// Format (per theiphonewiki keybag docs):
-    ///   magic "keybag", version u32, type u32, uuid 16B, numKeys u32,
-    ///   then per key: 4-byte class, 4-byte size, 4-byte attributes,
-    ///   4-byte keyType, key data (size bytes), optional WPKD.
-    /// After unlock, class keys in the "effective" bag are plaintext.
-    private func parseKeybag(at addr: UInt64) -> [UInt32: Data]? {
-        var head = [UInt8](repeating: 0, count: 0x40)
-        ds_kread(addr, &head, 0x40)
-        guard String(bytes: head[0..<6], encoding: .ascii) == "keybag" else { return nil }
-        let numKeys = leU32(head, 0x1c)
+    /// Format (per theiphonewiki keybag docs, all multi-byte fields BE):
+    ///   magic "keybag" (6B) | version u32 | type u32 | uuid 16B |
+    ///   numKeys u32 | per key: class u32, size u32, attrs u32,
+    ///   keyType u32 | key bytes (size) | optional WPKD.
+    /// On an unlocked device the effective keybag's class-key slots hold
+    /// the unwrapped keys; wrapped ones are included as candidates too, and
+    /// the caller's decrypt step verifies by trial. Each class may produce
+    /// several candidates (different keyType interpretations across builds).
+    private func parseKeybag(at addr: UInt64) -> [UInt32: [Data]]? {
+        var head = [UInt8](repeating: 0, count: 0x200)
+        ds_kread(addr, &head, 0x200)
+        guard head.count >= 0x22, String(bytes: head[0..<6], encoding: .ascii) == "keybag" else { return nil }
+        let numKeys = beU32(head, 0x1e)          // magic 6 + ver 4 + type 4 + uuid 16 = 0x1e
         guard numKeys > 0, numKeys < 32 else { return nil }
-        var keys: [UInt32: Data] = [:]
-        var off: UInt64 = 0x20
+        var keys: [UInt32: [Data]] = [:]
+        var off: UInt64 = 0x22                   // header ends here
         for _ in 0..<numKeys {
-            var entry = [UInt8](repeating: 0, count: 0x14)
-            ds_kread(addr + off, &entry, 0x14)
-            let cls = leU32(entry, 0)
-            let size = Int(leU32(entry, 4))
-            let keyType = leU32(entry, 0xc)
-            guard size > 0, size <= 64 else { break }
+            guard off + 16 <= UInt64(head.count) else { break }
+            let entryOff = Int(off)
+            let cls = beU32(head, entryOff)
+            let size = Int(beU32(head, entryOff + 4))
+            let keyType = beU32(head, entryOff + 12)
+            guard size > 0, size <= 64, off + 16 + UInt64(size) <= UInt64(head.count) else { break }
+            let keyStart = entryOff + 16
             var keyData = [UInt8](repeating: 0, count: size)
-            ds_kread(addr + off + 0x14, &keyData, UInt64(size))
-            // keyType 0 = wrapped (needs device key), 1 = unwrapped class key
-            if keyType == 1 {
-                keys[cls] = Data(keyData)
-            }
-            off += UInt64(0x14 + size)
+            for i in 0..<size { keyData[i] = head[keyStart + i] }
+            // keyType 0 = wrapped with UID key, 1 = wrapped with passcode,
+            // 2 = both, 5 = escrow. Unwrapped (plaintext) keys exist in the
+            // effective keybag after unlock; we keep every candidate and let
+            // the decrypt step try them all.
+            keys[cls, default: []].append(Data(keyData))
+            _ = keyType
+            off += UInt64(16 + size)
         }
         return keys.isEmpty ? nil : keys
     }
 
     /// Backend C: AppleKeyStore MIG via the (already kernel-patched) user
     /// client. Requires patchAppleKeyStoreEntitlements() to have run.
-    private func fetchViaAppleKeyStoreMIG(logger: (String) -> Void) -> [UInt32: Data]? {
+    private func fetchViaAppleKeyStoreMIG(logger: (String) -> Void) -> [UInt32: [Data]]? {
         logger("AppleKeyStore MIG backend requires entitlement patch; not implemented on-device yet")
         return nil
     }
@@ -550,6 +578,12 @@ final class keychainmgr {
         guard off + 3 < d.count else { return 0 }
         return UInt32(d[off]) | (UInt32(d[off + 1]) << 8) |
             (UInt32(d[off + 2]) << 16) | (UInt32(d[off + 3]) << 24)
+    }
+
+    private func beU32(_ d: [UInt8], _ off: Int) -> UInt32 {
+        guard off + 3 < d.count else { return 0 }
+        return UInt32(d[off]) << 24 | UInt32(d[off + 1]) << 16 |
+            UInt32(d[off + 2]) << 8 | UInt32(d[off + 3])
     }
 
     // MARK: item decryption
@@ -564,7 +598,10 @@ final class keychainmgr {
     ///   then 16-byte IV, then ciphertext.
     /// Unwrap: AES-ECB-decrypt the wrapped key with the class key.
     /// Decrypt: AES-CBC with the unwrapped key and the blob IV.
-    func decryptItem(_ item: inout LaraKeychainItem, classKeys: [UInt32: Data]) -> Bool {
+    /// Each class may carry several candidate keys; we try them in order
+    /// and accept the first that yields a well-formed (padding-valid)
+    /// plaintext.
+    func decryptItem(_ item: inout LaraKeychainItem, classKeys: [UInt32: [Data]]) -> Bool {
         let blob = item.data
         guard blob.count > 32 else { return false }
         var off = 0
@@ -573,9 +610,6 @@ final class keychainmgr {
         off += 4 // flags
         let pdmn = leU32Bytes(blob, off); off += 4
         _ = pdmn
-
-        guard let classKey = classKeys[item.pdmn] ?? classKeys[pdmn] else { return false }
-        guard classKey.count == 16 || classKey.count == 32 else { return false }
 
         // Parse the wrapped key blob.
         guard off + 16 <= blob.count else { return false }
@@ -593,13 +627,51 @@ final class keychainmgr {
         off += 16
         let ciphertext = blob.subdata(in: off..<blob.count)
 
-        // Unwrap the key with the class key (AES-ECB).
-        guard let unwrapped = aesECBDecrypt(wrappedKey, key: classKey) else { return false }
+        // Try every candidate class key (both the blob's pdmn and the item's).
+        let candidates = (classKeys[item.pdmn] ?? []) + (classKeys[pdmn] ?? [])
+        guard !candidates.isEmpty else { return false }
+        for classKey in candidates {
+            guard classKey.count == 16 || classKey.count == 24 || classKey.count == 32 else { continue }
+            // Unwrap the key with the class key (AES-ECB).
+            guard let unwrapped = aesECBDecrypt(wrappedKey, key: classKey) else { continue }
+            // Decrypt the payload (AES-CBC, PKCS7 or raw — try with trailing
+            // padding sanity so a wrong key does not silently corrupt).
+            guard let plain = aesCBCDecrypt(ciphertext, key: unwrapped, iv: iv) else { continue }
+            // Accept the first candidate whose plaintext looks plausible.
+            if isPlausiblePlaintext(plain) {
+                item.decrypted = plain
+                return true
+            }
+        }
+        return false
+    }
 
-        // Decrypt the payload.
-        guard let plain = aesCBCDecrypt(ciphertext, key: unwrapped, iv: iv) else { return false }
-        item.decrypted = plain
-        return true
+    /// Weak sanity check used to reject wrong-key decryptions: at least one
+    /// printable UTF-8 run, no NUL in the head, and valid trailing PKCS7
+    /// padding when the payload is padded.
+    private func isPlausiblePlaintext(_ data: Data) -> Bool {
+        guard !data.isEmpty, data.count % 16 == 0 else { return false }
+        // PKCS7 on the last block
+        let last = Int(data[data.count - 1])
+        if last >= 1, last <= 16, data.count >= last {
+            let pad = data.suffix(last)
+            if pad.allSatisfy({ $0 == UInt8(last) }) {
+                let body = data.dropLast(last)
+                return containsReadableText(body)
+            }
+        }
+        return containsReadableText(data)
+    }
+
+    private func containsReadableText(_ data: Data) -> Bool {
+        guard !data.isEmpty else { return false }
+        let sample = data.prefix(64)
+        var printable = 0
+        for b in sample {
+            if b == 0 { return false }
+            if (b >= 0x20 && b <= 0x7e) || b >= 0xa0 { printable += 1 }
+        }
+        return printable >= sample.count / 2
     }
 
     // MARK: export
@@ -689,7 +761,7 @@ final class keychainmgr {
             result.items = parsed.items
             result.messages.append(contentsOf: parsed.messages)
 
-            var keys: [UInt32: Data]? = nil
+            var keys: [UInt32: [Data]]? = nil
             for method in [KeybagFetchMethod.kernelKeybagScan,
                            KeybagFetchMethod.securitydScan,
                            KeybagFetchMethod.appleKeyStoreMIG] {
