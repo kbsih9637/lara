@@ -46,6 +46,25 @@ func fetchkcache() -> Bool {
 
     unlink(outpath)
 
+    /* Read-only probe: verify the vnode-by-open chain resolves before we
+       redirect (which writes v_data in kernel memory). On uncalibrated
+       builds wrong vnode offsets would corrupt memory and reboot the
+       device - bail out early instead. */
+    let probeOK = fakeread.withCString { fr in
+        vn_probe_vnodepath(fr)
+    }
+    if !probeOK {
+        globallogger.log("(fetchkcache) vnode probe failed on RestoreVersion.plist - vnode offsets may be wrong for this build; not redirecting")
+        return false
+    }
+    let probeKC = kcpath.withCString { kc in
+        vn_probe_vnodepath(kc)
+    }
+    if !probeKC {
+        globallogger.log("(fetchkcache) vnode probe failed on \(kcpath) - path may not exist or vnode offsets wrong")
+        return false
+    }
+
     var ogvn: UInt64 = 0
     var ogvd: UInt64 = 0
 

@@ -84,7 +84,7 @@ struct ContentView: View {
             
             if !mgr.hasOffsets {
                 Button {
-                    guard !dlingkcache else { return }
+                    guard !dlingkcache, !mgr.kcfetching else { return }
                     dlingkcache = true
 
                     DispatchQueue.global(qos: .userInitiated).async {
@@ -105,7 +105,7 @@ struct ContentView: View {
                         }
                     }
                 } label: {
-                    if dlingkcache {
+                    if dlingkcache || mgr.kcfetching {
                         HStack {
                             Text("Fetching Kernelcache...")
                             Spacer()
@@ -115,7 +115,7 @@ struct ContentView: View {
                         Text("Fetch Kernelcache")
                     }
                 }
-                .disabled(dlingkcache || !mgr.dsready)
+                .disabled(dlingkcache || mgr.kcfetching || !mgr.dsready)
             } else {
                 if selectedmethod == .hybrid {
                     LabeledContent(content: {

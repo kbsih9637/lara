@@ -79,6 +79,8 @@ final class KeepaliveWatchdog {
                     recoveryAttempts = 0
                     state = .ready(base)
                     log("keepalive: recovered stashed primitives (base 0x\(String(base, radix: 16)))")
+                    // resume automatic kernelcache/offsets/vfs bootstrap
+                    laramgr.shared.autoBootstrap()
                     return
                 }
                 // In-process re-exploit: only meaningful while the app runs.
@@ -91,6 +93,7 @@ final class KeepaliveWatchdog {
                             self.recoveryAttempts = 0
                             self.state = .ready(ds_get_kernel_base())
                             self.log("keepalive: exploit re-run succeeded")
+                            laramgr.shared.autoBootstrap()
                         } else {
                             self.state = .failed("exploit re-run failed")
                         }

